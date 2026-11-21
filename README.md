@@ -152,3 +152,7 @@ git merge upstream/dev
 ## 致谢
 
 感谢 [PCL-Community/PCL-CE](https://github.com/PCL-Community/PCL-CE) 的开发者与贡献者，以及上游 PCL 项目的原作者。
+
+## 说明：已移除的工作流
+
+本仓库删除了上游的 `mirrorchyan_release_note.yml`：它会在 release 被编辑时自动上传发布说明到 MirrorChyan，依赖上游的私有密钥 `MirrorChyanUploadToken`，在 fork 中必然失败并发送失败邮件。
