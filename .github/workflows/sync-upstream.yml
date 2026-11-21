@@ -170,6 +170,7 @@ jobs:
 
           - 关闭区域下载禁令（``RegionPolicy`` / ``RestrictedFeatures``）
           - 关于页「特别鸣谢」署名（WOCOWZj / DeepSeek）
+          - 更新页新增「改版更新」卡片：检测本仓库 release，显示版本、发布日期与说明，并提供 exe/zip 下载入口
 
           ### 下载方式
 
