@@ -11,6 +11,11 @@ on:
     # 每周五 18:00 UTC = 周六 02:00 (UTC+8)
     - cron: '0 18 * * 5'
   workflow_dispatch:
+    inputs:
+      force:
+        description: '即使上游没有新提交，也强制应用补丁并构建一次'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -52,12 +57,14 @@ jobs:
           $sha   = (git rev-parse upstream/dev).Trim()
           $short = $sha.Substring(0, 7)
           $behind = (git rev-list --count "dev..upstream/dev").Trim()
+          $force = "${{ inputs.force }}" -eq 'true'
+          $changed = [bool]($behind -gt 0) -or $force
           $version = (Select-String -Path 'PCL.Launcher/PCL.Launcher.csproj' -Pattern '<Version>([^<]+)</Version>').Matches[0].Groups[1].Value
 
           "sha=$sha"         | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           "short=$short"     | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          "changed=$([int]$behind -gt 0)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "changed=$($changed.ToString())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           "behind=$behind"   | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
           Write-Host "upstream/dev = $sha ($short), 落后 $behind 个提交, 版本 $version"
