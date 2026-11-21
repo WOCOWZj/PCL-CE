@@ -7,42 +7,37 @@ namespace PCL.Core.Test;
 public class RegionPolicyTest
 {
     [TestMethod]
-    public void ChinaTimeZoneAndChinaRegionRestrict()
+    public void ChinaTimeZoneAndChinaRegionDoNotRestrict()
     {
         var result = RegionPolicy.Evaluate(Signals("CN", "China Standard Time"));
-        Assert.AreEqual(RegionClassification.Mainland, result.Classification);
-        Assert.IsTrue(result.IsRestricted);
-    }
-
-    [TestMethod]
-    public void ChinaRegionWithoutChinaTimeZoneDoesNotRestrict()
-    {
-        var result = RegionPolicy.Evaluate(Signals("CN", "Tokyo Standard Time"));
         Assert.AreEqual(RegionClassification.Other, result.Classification);
         Assert.IsFalse(result.IsRestricted);
     }
 
     [TestMethod]
-    public void ChinaTimeZoneWithoutChinaRegionDoesNotRestrict()
+    public void AnyRegionAndTimeZoneCombinationDoesNotRestrict()
     {
-        var result = RegionPolicy.Evaluate(Signals("US", "China Standard Time"));
-        Assert.AreEqual(RegionClassification.Other, result.Classification);
-        Assert.IsFalse(result.IsRestricted);
-    }
+        var cases = new[]
+        {
+            ("CN", "Tokyo Standard Time"),
+            ("US", "China Standard Time"),
+            ("JP", "Tokyo Standard Time"),
+            ("156", "Asia/Shanghai"),
+            ("CN", "PRC")
+        };
 
-    [TestMethod]
-    public void OtherRegionAndTimeZoneDoNotRestrict()
-    {
-        var result = RegionPolicy.Evaluate(Signals("JP", "Tokyo Standard Time"));
-        Assert.AreEqual(RegionClassification.Other, result.Classification);
-        Assert.IsFalse(result.IsRestricted);
+        foreach (var (geo, timeZone) in cases)
+        {
+            var result = RegionPolicy.Evaluate(Signals(geo, timeZone));
+            Assert.AreEqual(RegionClassification.Other, result.Classification, $"geo={geo}, tz={timeZone}");
+            Assert.IsFalse(result.IsRestricted, $"geo={geo}, tz={timeZone}");
+        }
     }
 
     [TestMethod]
     public void MissingSignalsDoNotRestrict()
     {
         var result = RegionPolicy.Evaluate(new RegionSignals(null, false, null, false));
-        Assert.AreEqual(RegionClassification.Unknown, result.Classification);
         Assert.IsFalse(result.IsRestricted);
     }
 
@@ -50,7 +45,6 @@ public class RegionPolicyTest
     public void UnavailableRegionDoesNotRestrictEvenWithChinaTimeZone()
     {
         var result = RegionPolicy.Evaluate(new RegionSignals(null, false, "China Standard Time", true));
-        Assert.AreEqual(RegionClassification.Unknown, result.Classification);
         Assert.IsFalse(result.IsRestricted);
     }
 

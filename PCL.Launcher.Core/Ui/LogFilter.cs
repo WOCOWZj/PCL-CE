@@ -72,12 +72,12 @@ public static class RestrictedFeatures
         {
             try
             {
-                return Current?.IsRestricted ?? true;
+                return Current?.IsRestricted ?? false;
             }
             catch (Exception ex)
             {
-                LogWrapper.Warn(ex, "RegionPolicy", "区域限制服务异常，已按受限处理");
-                return true;
+                LogWrapper.Warn(ex, "RegionPolicy", "区域限制服务异常，已放行功能");
+                return false;
             }
         }
     }
@@ -90,12 +90,12 @@ public static class RestrictedFeatures
         }
         catch (Exception ex)
         {
-            LogWrapper.Warn(ex, "RegionPolicy", $"区域限制服务异常，已拒绝功能 {feature}");
-            return false;
+            LogWrapper.Warn(ex, "RegionPolicy", $"区域限制服务异常，已放行功能 {feature}");
+            return true;
         }
 
-        LogWrapper.Warn("RegionPolicy", $"区域限制服务缺失，已拒绝功能 {feature}");
-        return false;
+        LogWrapper.Warn("RegionPolicy", $"区域限制服务缺失，已放行功能 {feature}");
+        return true;
     }
 
     public static void ThrowIfRestricted(string feature)

@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using PCL.Core.Platform;
 
 namespace PCL.Core.App.Region;
@@ -24,45 +23,22 @@ public sealed record RegionAssessment(RegionClassification Classification, strin
 
 public static class RegionPolicy
 {
-    private static readonly HashSet<string> _ChinaTimeZones =
-    [
-        with(StringComparer.OrdinalIgnoreCase),
-        "China Standard Time",
-        "Asia/Shanghai",
-        "PRC"
-    ];
-
+    /// <summary>
+    /// 区域限制已关闭：无论时区与系统地区如何，都不再限制任何功能。
+    /// 原实现会在「时区为中国大陆」且「系统地区为中国大陆（CN / 156）」时返回
+    /// <see cref="RegionClassification.Mainland" />，进而禁止 Minecraft 下载、补全与整合包安装。
+    /// </summary>
     public static RegionAssessment Evaluate(RegionSignals signals)
     {
         ArgumentNullException.ThrowIfNull(signals);
 
-        // 仅在“时区为中国大陆”且“设备地区为中国大陆”时启用限制。
-        // 设备地区取系统“国家或地区”设置，而不是 OOBE 时写入的设备安装地区。
-        // 任一项无法确认或不为中国大陆，均不限制。
-        var chinaTimeZone = signals is { TimeZoneAvailable: true, TimeZoneId: not null }
-            && _ChinaTimeZones.Contains(signals.TimeZoneId);
-        var chinaRegion = signals.GeoNameAvailable && _IsChinaGeoName(signals.GeoName);
-
-        if (chinaTimeZone && chinaRegion)
-            return new RegionAssessment(
-                RegionClassification.Mainland,
-                "china-time-zone-and-region");
-
-        if (!signals.TimeZoneAvailable || !signals.GeoNameAvailable)
-            return new RegionAssessment(RegionClassification.Unknown, "signals-unavailable");
-
         return new RegionAssessment(
             RegionClassification.Other,
-            "not-china-time-zone-and-region");
+            "region-restriction-disabled");
     }
 
     public static RegionSignals ReadWindowsSignals()
     {
         return ApplicationRuntime.Current.Platform.Region.ReadSignals();
-    }
-
-    private static bool _IsChinaGeoName(string? name)
-    {
-        return string.Equals(name, "CN", StringComparison.OrdinalIgnoreCase) || name == "156";
     }
 }
