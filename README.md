@@ -107,6 +107,20 @@ git merge upstream/dev
 
 `PCL.Core/App/Region/RegionPolicy.cs` 是本分支唯一的「有意分歧」文件。上游后续若重写该文件，合并时保留「任何时区与地区都不受限」的语义即可；`LogFilter.cs` 与测试文件同理。
 
+## 自动跟进上游
+
+仓库内置 `.github/workflows/sync-upstream.yml`，每周五 18:00 UTC（周六 02:00 UTC+8）自动执行：
+
+1. 拉取上游 `PCL-Community/PCL-CE` 的 `dev`，合并进本仓库 `dev` 并推送；
+2. 在上游最新提交上重新应用 `patches/0001-disable-region-restriction.patch`；
+3. 用 .NET 11 预览版 SDK 构建 win-x64，创建**草稿** release（tag 形如 `v2.15.1-wocowzj.<上游短哈希>`）。
+
+- 合并冲突或补丁无法应用时，工作流会失败并自动开 issue 提醒手动处理；
+- 也可以在 Actions 页面手动触发（`workflow_dispatch`）；
+- 本分支的改动集中在 `patches/`，更新方法见 `patches/README.md`。
+
+首次启用：fork 的定时工作流需要在 Actions 页面点一次 "Enable workflow"。
+
 ---
 
 ## 许可证

@@ -1,0 +1,183 @@
+name: Sync upstream and build
+
+# 每周自动跟进上游 PCL-Community/PCL-CE 的 dev 分支：
+#   1) 把上游合并进本仓库 dev（冲突则中止并开 issue）
+#   2) 在上游最新代码上重新应用 patches/*.patch
+#   3) 用 .NET 11 预览版 SDK 构建 win-x64，并创建草稿 release
+# 也可以在 Actions 页面手动触发（workflow_dispatch）。
+
+on:
+  schedule:
+    # 每周五 18:00 UTC = 周六 02:00 (UTC+8)
+    - cron: '0 18 * * 5'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync-and-build:
+    name: Sync dev, apply patches, build
+    runs-on: windows-latest
+    env:
+      UPSTREAM_REPO: https://github.com/PCL-Community/PCL-CE.git
+      PATCH_FILE: patches/0001-disable-region-restriction.patch
+
+    steps:
+      - name: Checkout dev
+        uses: actions/checkout@v4
+        with:
+          ref: dev
+          fetch-depth: 0
+
+      - name: Configure git
+        shell: pwsh
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch upstream
+        id: upstream
+        shell: pwsh
+        run: |
+          git remote add upstream $env:UPSTREAM_REPO 2>$null
+          git remote set-url upstream $env:UPSTREAM_REPO
+          git fetch upstream dev --force
+
+          $sha   = (git rev-parse upstream/dev).Trim()
+          $short = $sha.Substring(0, 7)
+          $behind = (git rev-list --count "dev..upstream/dev").Trim()
+          $version = (Select-String -Path 'PCL.Launcher/PCL.Launcher.csproj' -Pattern '<Version>([^<]+)</Version>').Matches[0].Groups[1].Value
+
+          "sha=$sha"         | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "short=$short"     | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "changed=$([int]$behind -gt 0)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "behind=$behind"   | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+          Write-Host "upstream/dev = $sha ($short), 落后 $behind 个提交, 版本 $version"
+
+      - name: Stash patch outside worktree
+        if: steps.upstream.outputs.changed == 'True'
+        shell: pwsh
+        run: Copy-Item $env:PATCH_FILE (Join-Path $env:RUNNER_TEMP 'applied.patch') -Force
+
+      - name: Merge upstream into dev
+        if: steps.upstream.outputs.changed == 'True'
+        shell: pwsh
+        run: |
+          git merge upstream/dev --no-edit
+          if ($LASTEXITCODE -ne 0) {
+            git merge --abort
+            throw "与上游合并冲突，请手动解决后更新 patch"
+          }
+          git push origin dev
+
+      - name: Apply patch on top of upstream
+        if: steps.upstream.outputs.changed == 'True'
+        shell: pwsh
+        run: |
+          $sha = '${{ steps.upstream.outputs.sha }}'
+          git checkout --detach $sha
+          git -c core.autocrlf=false apply --3way --whitespace=nowarn (Join-Path $env:RUNNER_TEMP 'applied.patch')
+          if ($LASTEXITCODE -ne 0) {
+            throw "补丁无法应用到上游 $sha：上游可能改动了 RegionPolicy / LogFilter / 关于页 / 语言包，请更新 patches/0001-disable-region-restriction.patch"
+          }
+          Write-Host "补丁已应用"
+
+      - name: Setup .NET 11 (preview)
+        if: steps.upstream.outputs.changed == 'True'
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 11.0.x
+          dotnet-quality: preview
+
+      - name: Publish win-x64
+        id: publish
+        if: steps.upstream.outputs.changed == 'True'
+        shell: pwsh
+        run: |
+          dotnet publish PCL.Launcher/PCL.Launcher.csproj `
+            -c Release -r win-x64 -p:Platform=x64 `
+            --no-self-contained -o dist/win-x64
+          if ($LASTEXITCODE -ne 0) { throw "publish 失败" }
+          Get-ChildItem dist/win-x64 -Filter *.pdb -Recurse | Remove-Item -Force
+          Compress-Archive -Path 'dist/win-x64/*' -DestinationPath 'dist/PCL2_CE_Release_win-x64.zip' -Force
+          $size = [math]::Round((Get-Item 'dist/PCL2_CE_Release_win-x64.zip').Length / 1MB, 1)
+          Write-Host "产物大小: $size MB"
+          $sha256 = (Get-FileHash 'dist/PCL2_CE_Release_win-x64.zip' -Algorithm SHA256).Hash.ToLower()
+          "sha256=$sha256" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Resolve release notes
+        id: notes
+        if: steps.upstream.outputs.changed == 'True'
+        shell: pwsh
+        run: |
+          $behind = '${{ steps.upstream.outputs.behind }}'
+          $log = (git log --oneline "origin/dev~$behind..origin/dev" --no-merges) -join "`n"
+          $body = @"
+          ## 本次跟进
+
+          上游 ``PCL-Community/PCL-CE`` 的 ``dev`` 已跟进到 ``${{ steps.upstream.outputs.short }}``，本构建 = 上游该提交 + ``patches/0001-disable-region-restriction.patch``。
+
+          ### 上游变更
+
+          ```
+          $log
+          ```
+
+          ### 本分支改动（patch）
+
+          - 关闭区域下载禁令（``RegionPolicy`` / ``RestrictedFeatures``）
+          - 关于页「特别鸣谢」署名（WOCOWZj / DeepSeek）
+
+          ### 校验值
+
+          ```
+          SHA256: ${{ steps.publish.outputs.sha256 }}
+          PCL2_CE_Release_win-x64.zip
+          ```
+
+          > 个人构建，非官方发行版；问题请勿反馈上游仓库。
+          "@
+          $path = Join-Path $env:RUNNER_TEMP 'notes.md'
+          [IO.File]::WriteAllText($path, $body, (New-Object System.Text.UTF8Encoding($false)))
+          "path=$path" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Create draft release
+        if: steps.upstream.outputs.changed == 'True'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.upstream.outputs.version }}-wocowzj.${{ steps.upstream.outputs.short }}
+          name: PCL CE ${{ steps.upstream.outputs.version }} · 自动跟进 ${{ steps.upstream.outputs.short }}
+          body_path: ${{ steps.notes.outputs.path }}
+          draft: true
+          prerelease: false
+          files: dist/PCL2_CE_Release_win-x64.zip
+
+      - name: Open issue on failure
+        if: failure()
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $body = @"
+          自动跟进上游失败，请手动处理。
+
+          - 运行记录：${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          - 上游提交：``${{ steps.upstream.outputs.short }}``
+          - 版本：``${{ steps.upstream.outputs.version }}``
+
+          常见原因与处理：
+          1. **合并冲突**：``git fetch upstream && git merge upstream/dev`` 手动解决后推送 dev。
+          2. **补丁无法应用**：上游改动了 RegionPolicy / LogFilter / PageSetupAbout.axaml / 语言包，
+             需要对照新代码重新生成 patches/0001-disable-region-restriction.patch。
+          3. **构建失败**：查看运行日志中 Publish win-x64 步骤。
+          "@
+          gh issue create --title "上游自动跟进失败（${{ steps.upstream.outputs.short }}）" --body $body
+        continue-on-error: true
