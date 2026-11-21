@@ -7,7 +7,7 @@
 
 | 文件 | 作用 |
 | --- | --- |
-| `0001-disable-region-restriction.patch` | 关闭「国家和地区」下载禁令（`RegionPolicy`、`RestrictedFeatures`）＋ 关于页署名（`PageSetupAbout.axaml` ＋ 4 套语言包） |
+| `0001-fork-customization.patch` | 本分支全部改版内容：关闭「国家和地区」下载禁令（`RegionPolicy`、`RestrictedFeatures`）、关于页署名（`PageSetupAbout.axaml`）、更新页「改版更新」卡片（`ForkUpdateService`、`PageSetupUpdate*`）＋ 4 套语言包 |
 
 ## 重新生成
 
@@ -18,12 +18,16 @@ git diff <上游基线提交> HEAD -- `
   PCL.Core/App/Region/RegionPolicy.cs `
   PCL.Launcher.Core/Ui/LogFilter.cs `
   PCL.Core.Test/RegionPolicyTest.cs `
+  PCL.Launcher.Core/Updates/ForkUpdateService.cs `
+  PCL.Launcher/ViewModels/Setup/PageSetupUpdateViewModel.cs `
+  PCL.Launcher/Views/Pages/Setup/PageSetupUpdate.axaml `
+  PCL.Launcher/Views/Pages/Setup/PageSetupUpdate.axaml.cs `
   PCL.Launcher/Views/Pages/Setup/PageSetupAbout.axaml `
   PCL.Localization/Languages/zh-CN.axaml `
   PCL.Localization/Languages/zh-TW.axaml `
   PCL.Localization/Languages/en-US.axaml `
   PCL.Localization/Languages/en-GB.axaml `
-  | Out-File -Encoding utf8NoBOM patches/0001-disable-region-restriction.patch
+  | Out-File -Encoding utf8NoBOM patches/0001-fork-customization.patch
 ```
 
 > 注意：不要用 PowerShell 的 `>` 重定向生成补丁，它会写成 UTF-16 导致 `git apply` 报
@@ -34,7 +38,7 @@ git diff <上游基线提交> HEAD -- `
 ```powershell
 git fetch upstream dev
 git worktree add --detach .tmp-verify upstream/dev
-git -C .tmp-verify apply --3way --check ..\patches\0001-disable-region-restriction.patch
+git -C .tmp-verify apply --3way --check ..\patches\0001-fork-customization.patch
 git worktree remove .tmp-verify --force
 ```
 

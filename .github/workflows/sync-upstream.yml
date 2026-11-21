@@ -31,7 +31,7 @@ jobs:
     runs-on: windows-latest
     env:
       UPSTREAM_REPO: https://github.com/PCL-Community/PCL-CE.git
-      PATCH_FILE: patches/0001-disable-region-restriction.patch
+      PATCH_DIR: patches
 
     steps:
       - name: Checkout dev
@@ -72,7 +72,7 @@ jobs:
       - name: Stash patch outside worktree
         if: steps.upstream.outputs.changed == 'True'
         shell: pwsh
-        run: Copy-Item $env:PATCH_FILE (Join-Path $env:RUNNER_TEMP 'applied.patch') -Force
+        run: Copy-Item $env:PATCH_DIR (Join-Path $env:RUNNER_TEMP 'applied-patches') -Recurse -Force
 
       - name: Merge upstream into dev
         if: steps.upstream.outputs.changed == 'True'
@@ -91,11 +91,17 @@ jobs:
         run: |
           $sha = '${{ steps.upstream.outputs.sha }}'
           git checkout --detach $sha
-          git -c core.autocrlf=false apply --3way --whitespace=nowarn (Join-Path $env:RUNNER_TEMP 'applied.patch')
-          if ($LASTEXITCODE -ne 0) {
-            throw "补丁无法应用到上游 $sha：上游可能改动了 RegionPolicy / LogFilter / 关于页 / 语言包，请更新 patches/0001-disable-region-restriction.patch"
+          $patchDir = Join-Path $env:RUNNER_TEMP 'applied-patches'
+          $patches = Get-ChildItem $patchDir -Filter '*.patch' | Sort-Object Name
+          if (-not $patches) { throw "patches 目录下没有找到任何 .patch 文件" }
+          foreach ($patch in $patches) {
+            Write-Host "应用补丁: $($patch.Name)"
+            git -c core.autocrlf=false apply --3way --whitespace=nowarn $patch.FullName
+            if ($LASTEXITCODE -ne 0) {
+              throw "补丁 $($patch.Name) 无法应用到上游 $sha：上游可能改动了相关文件，请重新生成该补丁"
+            }
           }
-          Write-Host "补丁已应用"
+          Write-Host "全部补丁已应用（共 $($patches.Count) 个）"
 
       - name: Setup .NET 11 (preview)
         if: steps.upstream.outputs.changed == 'True'
@@ -152,7 +158,7 @@ jobs:
           $body = @"
           ## 本次跟进
 
-          上游 ``PCL-Community/PCL-CE`` 的 ``dev`` 已跟进到 ``${{ steps.upstream.outputs.short }}``，本构建 = 上游该提交 + ``patches/0001-disable-region-restriction.patch``。
+          上游 ``PCL-Community/PCL-CE`` 的 ``dev`` 已跟进到 ``${{ steps.upstream.outputs.short }}``，本构建 = 上游该提交 + ``patches/0001-fork-customization.patch``。
 
           ### 上游变更
 
@@ -214,7 +220,7 @@ jobs:
           常见原因与处理：
           1. **合并冲突**：``git fetch upstream && git merge upstream/dev`` 手动解决后推送 dev。
           2. **补丁无法应用**：上游改动了 RegionPolicy / LogFilter / PageSetupAbout.axaml / 语言包，
-             需要对照新代码重新生成 patches/0001-disable-region-restriction.patch。
+             需要对照新代码重新生成 patches/0001-fork-customization.patch。
           3. **构建失败**：查看运行日志中 Publish win-x64 步骤。
           "@
           gh issue create --title "上游自动跟进失败（${{ steps.upstream.outputs.short }}）" --body $body

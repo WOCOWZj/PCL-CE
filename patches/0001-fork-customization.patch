@@ -1,0 +1,909 @@
+diff --git a/PCL.Core.Test/RegionPolicyTest.cs b/PCL.Core.Test/RegionPolicyTest.cs
+index e46552e..f5fa6f5 100644
+--- a/PCL.Core.Test/RegionPolicyTest.cs
++++ b/PCL.Core.Test/RegionPolicyTest.cs
+@@ -7,42 +7,37 @@ namespace PCL.Core.Test;
+ public class RegionPolicyTest
+ {
+     [TestMethod]
+-    public void ChinaTimeZoneAndChinaRegionRestrict()
++    public void ChinaTimeZoneAndChinaRegionDoNotRestrict()
+     {
+         var result = RegionPolicy.Evaluate(Signals("CN", "China Standard Time"));
+-        Assert.AreEqual(RegionClassification.Mainland, result.Classification);
+-        Assert.IsTrue(result.IsRestricted);
+-    }
+-
+-    [TestMethod]
+-    public void ChinaRegionWithoutChinaTimeZoneDoesNotRestrict()
+-    {
+-        var result = RegionPolicy.Evaluate(Signals("CN", "Tokyo Standard Time"));
+-        Assert.AreEqual(RegionClassification.Other, result.Classification);
+-        Assert.IsFalse(result.IsRestricted);
+-    }
+-
+-    [TestMethod]
+-    public void ChinaTimeZoneWithoutChinaRegionDoesNotRestrict()
+-    {
+-        var result = RegionPolicy.Evaluate(Signals("US", "China Standard Time"));
+         Assert.AreEqual(RegionClassification.Other, result.Classification);
+         Assert.IsFalse(result.IsRestricted);
+     }
+ 
+     [TestMethod]
+-    public void OtherRegionAndTimeZoneDoNotRestrict()
++    public void AnyRegionAndTimeZoneCombinationDoesNotRestrict()
+     {
+-        var result = RegionPolicy.Evaluate(Signals("JP", "Tokyo Standard Time"));
+-        Assert.AreEqual(RegionClassification.Other, result.Classification);
+-        Assert.IsFalse(result.IsRestricted);
++        var cases = new[]
++        {
++            ("CN", "Tokyo Standard Time"),
++            ("US", "China Standard Time"),
++            ("JP", "Tokyo Standard Time"),
++            ("156", "Asia/Shanghai"),
++            ("CN", "PRC")
++        };
++
++        foreach (var (geo, timeZone) in cases)
++        {
++            var result = RegionPolicy.Evaluate(Signals(geo, timeZone));
++            Assert.AreEqual(RegionClassification.Other, result.Classification, $"geo={geo}, tz={timeZone}");
++            Assert.IsFalse(result.IsRestricted, $"geo={geo}, tz={timeZone}");
++        }
+     }
+ 
+     [TestMethod]
+     public void MissingSignalsDoNotRestrict()
+     {
+         var result = RegionPolicy.Evaluate(new RegionSignals(null, false, null, false));
+-        Assert.AreEqual(RegionClassification.Unknown, result.Classification);
+         Assert.IsFalse(result.IsRestricted);
+     }
+ 
+@@ -50,7 +45,6 @@ public class RegionPolicyTest
+     public void UnavailableRegionDoesNotRestrictEvenWithChinaTimeZone()
+     {
+         var result = RegionPolicy.Evaluate(new RegionSignals(null, false, "China Standard Time", true));
+-        Assert.AreEqual(RegionClassification.Unknown, result.Classification);
+         Assert.IsFalse(result.IsRestricted);
+     }
+ 
+diff --git a/PCL.Core/App/Region/RegionPolicy.cs b/PCL.Core/App/Region/RegionPolicy.cs
+index 1440e9d..8c2bb82 100644
+--- a/PCL.Core/App/Region/RegionPolicy.cs
++++ b/PCL.Core/App/Region/RegionPolicy.cs
+@@ -1,5 +1,4 @@
+ using System;
+-using System.Collections.Generic;
+ using PCL.Core.Platform;
+ 
+ namespace PCL.Core.App.Region;
+@@ -24,45 +23,22 @@ public sealed record RegionAssessment(RegionClassification Classification, strin
+ 
+ public static class RegionPolicy
+ {
+-    private static readonly HashSet<string> _ChinaTimeZones =
+-    [
+-        with(StringComparer.OrdinalIgnoreCase),
+-        "China Standard Time",
+-        "Asia/Shanghai",
+-        "PRC"
+-    ];
+-
++    /// <summary>
++    /// 区域限制已关闭：无论时区与系统地区如何，都不再限制任何功能。
++    /// 原实现会在「时区为中国大陆」且「系统地区为中国大陆（CN / 156）」时返回
++    /// <see cref="RegionClassification.Mainland" />，进而禁止 Minecraft 下载、补全与整合包安装。
++    /// </summary>
+     public static RegionAssessment Evaluate(RegionSignals signals)
+     {
+         ArgumentNullException.ThrowIfNull(signals);
+ 
+-        // 仅在“时区为中国大陆”且“设备地区为中国大陆”时启用限制。
+-        // 设备地区取系统“国家或地区”设置，而不是 OOBE 时写入的设备安装地区。
+-        // 任一项无法确认或不为中国大陆，均不限制。
+-        var chinaTimeZone = signals is { TimeZoneAvailable: true, TimeZoneId: not null }
+-            && _ChinaTimeZones.Contains(signals.TimeZoneId);
+-        var chinaRegion = signals.GeoNameAvailable && _IsChinaGeoName(signals.GeoName);
+-
+-        if (chinaTimeZone && chinaRegion)
+-            return new RegionAssessment(
+-                RegionClassification.Mainland,
+-                "china-time-zone-and-region");
+-
+-        if (!signals.TimeZoneAvailable || !signals.GeoNameAvailable)
+-            return new RegionAssessment(RegionClassification.Unknown, "signals-unavailable");
+-
+         return new RegionAssessment(
+             RegionClassification.Other,
+-            "not-china-time-zone-and-region");
++            "region-restriction-disabled");
+     }
+ 
+     public static RegionSignals ReadWindowsSignals()
+     {
+         return ApplicationRuntime.Current.Platform.Region.ReadSignals();
+     }
+-
+-    private static bool _IsChinaGeoName(string? name)
+-    {
+-        return string.Equals(name, "CN", StringComparison.OrdinalIgnoreCase) || name == "156";
+-    }
+ }
+\ No newline at end of file
+diff --git a/PCL.Launcher.Core/Ui/LogFilter.cs b/PCL.Launcher.Core/Ui/LogFilter.cs
+index 6fdcfd7..2f7f36a 100644
+--- a/PCL.Launcher.Core/Ui/LogFilter.cs
++++ b/PCL.Launcher.Core/Ui/LogFilter.cs
+@@ -72,12 +72,12 @@ public static class RestrictedFeatures
+         {
+             try
+             {
+-                return Current?.IsRestricted ?? true;
++                return Current?.IsRestricted ?? false;
+             }
+             catch (Exception ex)
+             {
+-                LogWrapper.Warn(ex, "RegionPolicy", "区域限制服务异常，已按受限处理");
+-                return true;
++                LogWrapper.Warn(ex, "RegionPolicy", "区域限制服务异常，已放行功能");
++                return false;
+             }
+         }
+     }
+@@ -90,12 +90,12 @@ public static class RestrictedFeatures
+         }
+         catch (Exception ex)
+         {
+-            LogWrapper.Warn(ex, "RegionPolicy", $"区域限制服务异常，已拒绝功能 {feature}");
+-            return false;
++            LogWrapper.Warn(ex, "RegionPolicy", $"区域限制服务异常，已放行功能 {feature}");
++            return true;
+         }
+ 
+-        LogWrapper.Warn("RegionPolicy", $"区域限制服务缺失，已拒绝功能 {feature}");
+-        return false;
++        LogWrapper.Warn("RegionPolicy", $"区域限制服务缺失，已放行功能 {feature}");
++        return true;
+     }
+ 
+     public static void ThrowIfRestricted(string feature)
+diff --git a/PCL.Launcher.Core/Updates/ForkUpdateService.cs b/PCL.Launcher.Core/Updates/ForkUpdateService.cs
+new file mode 100644
+index 0000000..27d1397
+--- /dev/null
++++ b/PCL.Launcher.Core/Updates/ForkUpdateService.cs
+@@ -0,0 +1,164 @@
++using System.Text.Json.Nodes;
++using PCL.Core.Logging;
++using PCL.Network;
++
++namespace PCL.Launcher.Core.Updates;
++
++/// <summary>本 fork（WOCOWZj 改版）的发布信息。</summary>
++/// <param name="Tag">发布标签，例如 <c>v2.15.1-wocowzj.1</c>。</param>
++/// <param name="Name">发布标题。</param>
++/// <param name="Body">发布说明（Markdown）。</param>
++/// <param name="PublishedAt">发布时间（UTC）。</param>
++/// <param name="HtmlUrl">发布页地址。</param>
++/// <param name="ExeUrl">单文件自包含版下载地址，没有时为 <c>null</c>。</param>
++/// <param name="ZipUrl">框架依赖版压缩包下载地址，没有时为 <c>null</c>。</param>
++public sealed record ForkReleaseInfo(
++    string Tag,
++    string Name,
++    string Body,
++    DateTimeOffset PublishedAt,
++    string HtmlUrl,
++    string? ExeUrl,
++    string? ZipUrl);
++
++/// <summary>
++/// 检查本 fork 的 GitHub Releases，用于在上游更新检查之外额外提示「改版」的新版本。
++/// 只读取公开 API，不需要凭据；失败时返回 <c>null</c> 而不是抛异常，
++/// 以免改版更新检查失败影响上游更新检查。
++/// </summary>
++public static class ForkUpdateService
++{
++    private const string Owner = "WOCOWZj";
++    private const string Repository = "PCL-CE";
++
++    private const string ApiUrl =
++        "https://api.github.com/repos/" + Owner + "/" + Repository + "/releases?per_page=20";
++
++    private const string ReleasesPageUrl =
++        "https://github.com/" + Owner + "/" + Repository + "/releases";
++
++    /// <summary>发布页地址，供「打开全部发布」使用。</summary>
++    public static string AllReleasesUrl => ReleasesPageUrl;
++
++    /// <summary>
++    /// 获取本 fork 最新的正式发布（忽略草稿与预发布）。
++    /// 网络失败、限流或返回结构异常时返回 <c>null</c>。
++    /// </summary>
++    public static async Task<ForkReleaseInfo?> GetLatestReleaseAsync()
++    {
++        try
++        {
++            var json = await Requester
++                .FetchJsonAsync(
++                    ApiUrl,
++                    new RequestParam
++                    {
++                        Accept = "application/vnd.github+json",
++                        UseBrowserUserAgent = true,
++                        Timeout = 15000,
++                        Retries = 2
++                    })
++                .ConfigureAwait(false);
++
++            if (json is not JsonArray list) return null;
++
++            ForkReleaseInfo? latest = null;
++            foreach (var node in list)
++            {
++                if (node is not JsonObject release) continue;
++                if (release["draft"]?.GetValue<bool>() ?? false) continue;
++                if (release["prerelease"]?.GetValue<bool>() ?? false) continue;
++
++                var tag = release["tag_name"]?.ToString();
++                if (string.IsNullOrWhiteSpace(tag)) continue;
++
++                var publishedAt = DateTimeOffset.TryParse(
++                    release["published_at"]?.ToString() ?? release["created_at"]?.ToString(),
++                    out var parsed)
++                    ? parsed
++                    : DateTimeOffset.MinValue;
++
++                var info = new ForkReleaseInfo(
++                    tag,
++                    release["name"]?.ToString() ?? tag,
++                    release["body"]?.ToString() ?? string.Empty,
++                    publishedAt,
++                    release["html_url"]?.ToString() ?? ReleasesPageUrl,
++                    _FindAssetUrl(release, ".exe"),
++                    _FindAssetUrl(release, ".zip"));
++
++                if (latest is null || info.PublishedAt > latest.PublishedAt)
++                    latest = info;
++            }
++
++            return latest;
++        }
++        catch (Exception ex)
++        {
++            LogWrapper.Warn(ex, "ForkUpdate", "获取改版更新信息失败");
++            return null;
++        }
++    }
++
++    /// <summary>
++    /// 抽取版本号本身：<c>v2.15.1-wocowzj.1</c> → <c>2.15.1</c>，
++    /// <c>v2.15.1-wocowzj.6300bfe</c> → <c>2.15.1</c>。
++    /// </summary>
++    public static string ParseVersion(string tag)
++    {
++        var text = tag.Trim();
++        if (text.StartsWith('v') || text.StartsWith('V')) text = text[1..];
++        var dash = text.IndexOf('-');
++        return dash > 0 ? text[..dash] : text;
++    }
++
++    /// <summary>
++    /// 判断是否有比 <paramref name="currentVersion" /> 更新的改版发布。
++    /// 版本相同时按「发布时间晚于安装时间」判定，即同版本重新构建过也算更新。
++    /// </summary>
++    public static bool IsUpdateAvailable(
++        ForkReleaseInfo release,
++        string? currentVersion,
++        DateTimeOffset? installedAt)
++    {
++        if (string.IsNullOrWhiteSpace(currentVersion)) return true;
++
++        var comparison = CompareVersions(ParseVersion(release.Tag), currentVersion);
++        if (comparison > 0) return true;
++        if (comparison < 0) return false;
++
++        // 版本号相同：只有明确知道安装时间、且发布更晚时才提示，
++        // 避免用户在用本地自编译版本时被反复提示「有更新」。
++        return installedAt is { } installed && release.PublishedAt > installed.AddMinutes(1);
++    }
++
++    private static int CompareVersions(string left, string right)
++    {
++        var leftParts = left.Split('.');
++        var rightParts = right.Split('.');
++        var length = Math.Max(leftParts.Length, rightParts.Length);
++        for (var i = 0; i < length; i++)
++        {
++            var leftValue = i < leftParts.Length && int.TryParse(leftParts[i], out var l) ? l : 0;
++            var rightValue = i < rightParts.Length && int.TryParse(rightParts[i], out var r) ? r : 0;
++            if (leftValue != rightValue) return leftValue.CompareTo(rightValue);
++        }
++
++        return 0;
++    }
++
++    private static string? _FindAssetUrl(JsonObject release, string extension)
++    {
++        if (release["assets"] is not JsonArray assets) return null;
++        foreach (var asset in assets)
++        {
++            if (asset is not JsonObject item) continue;
++            var name = item["name"]?.ToString();
++            if (name?.EndsWith(extension, StringComparison.OrdinalIgnoreCase) != true) continue;
++            var url = item["browser_download_url"]?.ToString();
++            if (!string.IsNullOrWhiteSpace(url)) return url;
++        }
++
++        return null;
++    }
++}
+diff --git a/PCL.Launcher/ViewModels/Setup/PageSetupUpdateViewModel.cs b/PCL.Launcher/ViewModels/Setup/PageSetupUpdateViewModel.cs
+index 6bbcc87..62020f7 100644
+--- a/PCL.Launcher/ViewModels/Setup/PageSetupUpdateViewModel.cs
++++ b/PCL.Launcher/ViewModels/Setup/PageSetupUpdateViewModel.cs
+@@ -6,6 +6,7 @@ using PCL.Core.UI.Hints;
+ using PCL.Core.Utils;
+ using PCL.Core.Utils.OS;
+ using PCL.Core.ViewModel;
++using PCL.Launcher.Core.Updates;
+ using PCL.Text;
+ 
+ namespace PCL;
+@@ -28,6 +29,10 @@ public partial class PageSetupUpdateViewModel : ViewModelBase
+ 
+     private double _updateProgress;
+ 
++    private ForkReleaseInfo? _forkRelease;
++    private bool _forkChecking;
++    private string _forkStatusText = string.Empty;
++
+     [ObservableProperty] public partial bool ChangelogDetailEnabled { get; set; } = true;
+ 
+     [ObservableProperty] public partial bool ChannelEnabled { get; set; } = true;
+@@ -36,6 +41,36 @@ public partial class PageSetupUpdateViewModel : ViewModelBase
+ 
+     [ObservableProperty] public partial string CurrentVersionText { get; set; } = string.Empty;
+ 
++    /// <summary>改版更新：检测到的改版版本名，例如 <c>PCL CE 2.15.1 · WOCOWZj 改版</c>。</summary>
++    [ObservableProperty] public partial string ForkNameText { get; set; } = string.Empty;
++
++    /// <summary>改版更新：状态描述，例如发布时间或「已是最新改版」。</summary>
++    [ObservableProperty] public partial string ForkDescText { get; set; } = string.Empty;
++
++    /// <summary>改版更新：更新日志摘要。</summary>
++    [ObservableProperty] public partial string ForkChangelogText { get; set; } = string.Empty;
++
++    /// <summary>改版更新：下载按钮文字（自包含 exe / zip / 打开下载页）。</summary>
++    [ObservableProperty] public partial string ForkDownloadText { get; set; } = string.Empty;
++
++    /// <summary>改版更新：下载按钮是否可用。</summary>
++    [ObservableProperty] public partial bool ForkDownloadEnabled { get; set; } = true;
++
++    /// <summary>改版更新：是否显示「有新改版」卡片。</summary>
++    [ObservableProperty] public partial bool ShowForkUpdateCard { get; set; }
++
++    /// <summary>改版更新：是否检测到比当前更新的改版版本（用于高亮下载按钮）。</summary>
++    [ObservableProperty] public partial bool ShowForkUpdateBadge { get; set; }
++
++    /// <summary>改版更新：检查失败时显示「重试」按钮。</summary>
++    [ObservableProperty] public partial bool ShowForkRetry { get; set; }
++
++    /// <summary>改版更新：查看更新日志按钮是否可用。</summary>
++    [ObservableProperty] public partial bool ForkChangelogEnabled { get; set; } = true;
++
++    /// <summary>改版更新：当前改版发布的网页地址。</summary>
++    [ObservableProperty] public partial string? ForkHtmlUrl { get; set; }
++
+     [ObservableProperty]
+     public partial string MirrorChyanKey { get; set; } = Config.Update.MirrorChyanKey;
+ 
+@@ -105,12 +140,174 @@ public partial class PageSetupUpdateViewModel : ViewModelBase
+     public void Reload()
+     {
+         CurrentVersionText = "PCL CE " + VersionNameFormat(LauncherCommon.VersionBaseName);
++        ForkNameText = Lang.Text("Setup.Update.Fork.Name");
++        ForkDescText = Lang.Text("Setup.Update.Fork.Checking");
+         MirrorChyanKey = Config.Update.MirrorChyanKey;
+         UpdateModeIndex = Math.Clamp((int)Config.Update.UpdateMode, 0, 3);
+         SetUpdateButtonState(InstallButtonState);
+         UpdateButtonEnabled = !IsFlatpak;
+     }
+ 
++    /// <summary>
++    /// 检查本 fork 的改版发布。与上游更新检查相互独立：
++    /// 网络失败只更新状态文字，不弹窗、不影响上游更新卡片。
++    /// </summary>
++    public async Task CheckForkUpdateAsync()
++    {
++        if (_forkChecking) return;
++        _forkChecking = true;
++        try
++        {
++            _forkStatusText = Lang.Text("Setup.Update.Fork.Checking");
++            ForkDescText = _forkStatusText;
++
++            var release = await ForkUpdateService.GetLatestReleaseAsync();
++            if (release is null)
++            {
++                // 网络失败（无网、GitHub 限流 403、代理异常等）也要把卡片显示出来，
++                // 否则用户完全看不到「改版更新」入口，也无法手动重试。
++                _forkRelease = null;
++                ForkHtmlUrl = null;
++                ShowForkUpdateCard = true;
++                ShowForkUpdateBadge = false;
++                ForkNameText = Lang.Text("Setup.Update.Fork.Name");
++                ForkDescText = Lang.Text("Setup.Update.Fork.CheckFailed");
++                ForkChangelogText = Lang.Text("Setup.Update.Fork.CheckFailed.Hint");
++                ForkDownloadText = Lang.Text("Setup.Update.Fork.Download.Page");
++                ForkDownloadEnabled = true;
++                ForkChangelogEnabled = false;
++                ShowForkRetry = true;
++                return;
++            }
++
++            _forkRelease = release;
++            ForkHtmlUrl = release.HtmlUrl;
++            var hasUpdate = ForkUpdateService.IsUpdateAvailable(
++                release,
++                LauncherCommon.VersionBaseName,
++                null);
++
++            ForkNameText = "PCL CE "
++                           + VersionNameFormat(ForkUpdateService.ParseVersion(release.Tag))
++                           + " · WOCOWZj 改版";
++            ForkDescText = hasUpdate
++                ? Lang.Text("Setup.Update.Fork.Desc.New", release.PublishedAt.ToLocalTime().ToString("yyyy-MM-dd"))
++                : Lang.Text("Setup.Update.Fork.Desc.Latest",
++                    release.PublishedAt.ToLocalTime().ToString("yyyy-MM-dd"));
++            ForkChangelogText = ExtractSummary(release.Body);
++            if (string.IsNullOrWhiteSpace(ForkChangelogText))
++                ForkChangelogText = Lang.Text("Setup.Update.Fork.Changelog.Empty");
++
++            ForkDownloadText = release.ExeUrl is not null
++                ? Lang.Text("Setup.Update.Fork.Download.Exe")
++                : release.ZipUrl is not null
++                    ? Lang.Text("Setup.Update.Fork.Download.Zip")
++                    : Lang.Text("Setup.Update.Fork.Download.Page");
++            ForkDownloadEnabled = true;
++            ForkChangelogEnabled = true;
++            ShowForkRetry = false;
++
++            // 无论是否有新版本都显示卡片：没有更新时用户仍能看到当前改版版本与全部发布入口，
++            // 有新版本时才高亮下载按钮。
++            ShowForkUpdateCard = true;
++            ShowForkUpdateBadge = hasUpdate;
++        }
++        catch (Exception ex)
++        {
++            LauncherCommon.Log(
++                ex,
++                "检查改版更新失败",
++                LauncherLogLevel.Hint,
++                userSummary: Lang.Text("Setup.Update.Fork.CheckFailed"));
++            ShowForkUpdateCard = true;
++            ShowForkUpdateBadge = false;
++            ForkNameText = Lang.Text("Setup.Update.Fork.Name");
++            ForkDescText = Lang.Text("Setup.Update.Fork.CheckFailed");
++            ForkChangelogText = Lang.Text("Setup.Update.Fork.CheckFailed.Hint");
++            ForkDownloadText = Lang.Text("Setup.Update.Fork.Download.Page");
++            ForkDownloadEnabled = true;
++            ForkChangelogEnabled = false;
++            ShowForkRetry = true;
++        }
++        finally
++        {
++            _forkChecking = false;
++        }
++    }
++
++    /// <summary>
++    /// 改版下载：优先单文件自包含 exe，其次 zip，都没有则打开发布页。
++    /// </summary>
++    public void OpenForkDownload()
++    {
++        var url = _forkRelease?.ExeUrl ?? _forkRelease?.ZipUrl ?? _forkRelease?.HtmlUrl
++                  ?? ForkUpdateService.AllReleasesUrl;
++        ForkDownloadEnabled = false;
++        try
++        {
++            Basics.OpenPath(url);
++        }
++        catch (Exception ex)
++        {
++            LauncherCommon.Log(
++                ex,
++                "打开改版下载地址失败",
++                LauncherLogLevel.Feedback,
++                userSummary: Lang.Text("Setup.Error.OperationFailed"));
++        }
++        finally
++        {
++            ForkDownloadEnabled = true;
++        }
++    }
++
++    /// <summary>查看改版发布说明。</summary>
++    public async Task ShowForkChangelogAsync()
++    {
++        ForkChangelogEnabled = false;
++        try
++        {
++            var content = _forkRelease?.Body;
++            if (string.IsNullOrWhiteSpace(content))
++            {
++                await Dialog.ShowAsync(
++                    new TextDialogRequest
++                    {
++                        Title = Lang.Text("Setup.Update.Fork.Changelog.Title"),
++                        Content = Lang.Text("Setup.Update.Fork.Changelog.Unavailable"),
++                        Buttons = DialogButtons.Ok
++                    });
++                return;
++            }
++
++            await Dialog.ShowAsync(
++                new MarkdownDialogRequest
++                {
++                    Title = Lang.Text("Setup.Update.Fork.Changelog.Title"),
++                    Content = content,
++                    Buttons = DialogButtons.Ok
++                });
++        }
++        catch (Exception ex)
++        {
++            LauncherCommon.Log(
++                ex,
++                "查看改版更新日志失败",
++                LauncherLogLevel.Feedback,
++                userSummary: Lang.Text("Setup.Error.OperationFailed"));
++        }
++        finally
++        {
++            ForkChangelogEnabled = true;
++        }
++    }
++
++    /// <summary>打开改版发布页。</summary>
++    public static void OpenForkReleasesPage(string? url)
++    {
++        Basics.OpenPath(url ?? ForkUpdateService.AllReleasesUrl);
++    }
++
+     public async Task CheckUpdateAsync()
+     {
+         if (_checking) return;
+diff --git a/PCL.Launcher/Views/Pages/Setup/PageSetupAbout.axaml b/PCL.Launcher/Views/Pages/Setup/PageSetupAbout.axaml
+index 5330898..e6f1d24 100644
+--- a/PCL.Launcher/Views/Pages/Setup/PageSetupAbout.axaml
++++ b/PCL.Launcher/Views/Pages/Setup/PageSetupAbout.axaml
+@@ -84,7 +84,7 @@
+                 <Grid x:Name="PanThanks"
+                       Margin="21,40,21,16"
+                       ColumnDefinitions="40,*,150"
+-                      RowDefinitions="45,45,45,45,45,45,45">
++                      RowDefinitions="45,45,45,45,45,45,45,45,45">
+                     <ui:MyImage Grid.Row="0"
+                                 Grid.Column="0"
+                                 Width="34"
+@@ -218,6 +218,21 @@
+                                    IsHitTestVisible="False"
+                                    Info="{loc:Loc Setup.About.SpecialThanks.Info.IconDesign}"
+                                    Title="{loc:Loc Setup.About.SpecialThanks.Name.Emperormummy}" />
++
++                    <ui:MyListItem Grid.Row="7"
++                                   Grid.Column="1"
++                                   Grid.ColumnSpan="2"
++                                   Margin="-5,0,0,0"
++                                   IsHitTestVisible="False"
++                                   Info="{loc:Loc Setup.About.SpecialThanks.Info.Wocowzj}"
++                                   Title="{loc:Loc Setup.About.SpecialThanks.Name.Wocowzj}" />
++                    <ui:MyListItem Grid.Row="8"
++                                   Grid.Column="1"
++                                   Grid.ColumnSpan="2"
++                                   Margin="-5,0,0,0"
++                                   IsHitTestVisible="False"
++                                   Info="{loc:Loc Setup.About.SpecialThanks.Info.DeepSeek}"
++                                   Title="{loc:Loc Setup.About.SpecialThanks.Name.DeepSeek}" />
+                 </Grid>
+             </ui:MyCard>
+ 
+diff --git a/PCL.Launcher/Views/Pages/Setup/PageSetupUpdate.axaml b/PCL.Launcher/Views/Pages/Setup/PageSetupUpdate.axaml
+index f136cab..539bd27 100644
+--- a/PCL.Launcher/Views/Pages/Setup/PageSetupUpdate.axaml
++++ b/PCL.Launcher/Views/Pages/Setup/PageSetupUpdate.axaml
+@@ -191,6 +191,80 @@
+                 </StackPanel>
+             </ui:MyCard>
+ 
++            <ui:MyCard x:Name="CardForkUpdate"
++                       Margin="0,15"
++                       IsVisible="{Binding ShowForkUpdateCard}">
++                <StackPanel Margin="20,20,20,20">
++                    <Grid ColumnDefinitions="50,10,*,150"
++                          RowDefinitions="29,1,20,8,Auto,10,Auto">
++                        <Image Grid.Row="0"
++                               Grid.RowSpan="3"
++                               Grid.Column="0"
++                               Width="50"
++                               Height="50"
++                               HorizontalAlignment="Left"
++                               VerticalAlignment="Center"
++                               Source="avares://PCL.Launcher/Assets/Images/icon.png" />
++                        <TextBlock x:Name="TextForkUpdateName"
++                                   Grid.Row="0"
++                                   Grid.Column="2"
++                                   FontWeight="Bold"
++                                   FontSize="20"
++                                   HorizontalAlignment="Left"
++                                   VerticalAlignment="Bottom"
++                                   Text="{Binding ForkNameText}" />
++                        <TextBlock x:Name="TextForkUpdateDesc"
++                                   Grid.Row="2"
++                                   Grid.Column="2"
++                                   FontSize="14"
++                                   HorizontalAlignment="Left"
++                                   VerticalAlignment="Top"
++                                   Text="{Binding ForkDescText}" />
++                        <Grid Grid.Row="0"
++                              Grid.RowSpan="2"
++                              Grid.Column="3"
++                              HorizontalAlignment="Stretch"
++                              VerticalAlignment="Center">
++                            <ui:MyButton x:Name="BtnForkRetry"
++                                         Width="140"
++                                         MinWidth="85"
++                                         Height="30"
++                                         Padding="13,0"
++                                         ColorType="Normal"
++                                         IsVisible="{Binding ShowForkRetry}"
++                                         Text="{loc:Loc Setup.Update.Fork.Retry}" />
++                            <ui:MyButton x:Name="BtnForkDownload"
++                                         Width="140"
++                                         MinWidth="85"
++                                         Height="30"
++                                         Padding="13,0"
++                                         ColorType="Highlight"
++                                         IsVisible="{Binding ShowForkUpdateBadge}"
++                                         IsEnabled="{Binding ForkDownloadEnabled}"
++                                         Text="{Binding ForkDownloadText}" />
++                        </Grid>
++                        <TextBlock x:Name="TextForkChangelog"
++                                   Grid.Row="4"
++                                   Grid.Column="0"
++                                   Grid.ColumnSpan="4"
++                                   TextWrapping="Wrap"
++                                   Text="{Binding ForkChangelogText}" />
++                        <StackPanel Grid.Row="6"
++                                    Grid.Column="0"
++                                    Grid.ColumnSpan="4"
++                                    Orientation="Horizontal">
++                            <ui:MyTextButton x:Name="BtnForkChangelogDetail"
++                                             FontWeight="Thin"
++                                             Margin="0,0,20,0"
++                                             IsEnabled="{Binding ForkChangelogEnabled}"
++                                             Text="{loc:Loc Setup.Update.Fork.Changelog.View}" />
++                            <ui:MyTextButton x:Name="BtnForkReleases"
++                                             FontWeight="Thin"
++                                             Text="{loc:Loc Setup.Update.Fork.OpenReleases}" />
++                        </StackPanel>
++                    </Grid>
++                </StackPanel>
++            </ui:MyCard>
+             <ui:MyCard x:Name="CardOtherOption"
+                        Margin="0,15"
+                        Title="{loc:Loc Setup.Update.OtherOptions.Title}"
+diff --git a/PCL.Launcher/Views/Pages/Setup/PageSetupUpdate.axaml.cs b/PCL.Launcher/Views/Pages/Setup/PageSetupUpdate.axaml.cs
+index ea631da..8676da7 100644
+--- a/PCL.Launcher/Views/Pages/Setup/PageSetupUpdate.axaml.cs
++++ b/PCL.Launcher/Views/Pages/Setup/PageSetupUpdate.axaml.cs
+@@ -32,6 +32,11 @@ public partial class PageSetupUpdate : MyPageRight
+         BtnChangelog.Click += (_, _) => PageSetupUpdateViewModel.OpenReleasesPage();
+         BtnChangelogDetail.Click += async (_, _) => await ViewModel.ShowChangelogAsync();
+         BtnUpdate.Click += async (_, _) => await ViewModel.StartUpdateAsync();
++        BtnForkDownload.Click += (_, _) => ViewModel.OpenForkDownload();
++        BtnForkRetry.Click += async (_, _) => await ViewModel.CheckForkUpdateAsync();
++        BtnForkChangelogDetail.Click += async (_, _) => await ViewModel.ShowForkChangelogAsync();
++        BtnForkReleases.Click += (_, _) =>
++            PageSetupUpdateViewModel.OpenForkReleasesPage(ViewModel.ForkHtmlUrl);
+         ComboSystemUpdateMode.IsEnabled = UpdateManager.SupportsInAppUpdate;
+         Loaded += async (_, _) =>
+         {
+@@ -39,6 +44,7 @@ public partial class PageSetupUpdate : MyPageRight
+             _loaded = true;
+             Reload();
+             await ViewModel.CheckUpdateAsync();
++            await ViewModel.CheckForkUpdateAsync();
+         };
+     }
+ 
+diff --git a/PCL.Localization/Languages/en-GB.axaml b/PCL.Localization/Languages/en-GB.axaml
+index ca4a6a4..2617d87 100644
+--- a/PCL.Localization/Languages/en-GB.axaml
++++ b/PCL.Localization/Languages/en-GB.axaml
+@@ -2541,15 +2541,19 @@
+     <sys:String x:Key="Setup.About.SpecialThanks.GoBlog">Blog</sys:String>
+     <sys:String x:Key="Setup.About.SpecialThanks.Info.Bmclapi">Provided BMCLAPI mirror and Forge installation tool. Details at https://bmclapi.bangbang93.com</sys:String>
+     <sys:String x:Key="Setup.About.SpecialThanks.Info.Cloud">Provided cloud services for PCL CE.</sys:String>
++    <sys:String x:Key="Setup.About.SpecialThanks.Info.DeepSeek">Assisted with the changes in this build.</sys:String>
+     <sys:String x:Key="Setup.About.SpecialThanks.Info.IconDesign">Designed and created the PCL CE icon.</sys:String>
+     <sys:String x:Key="Setup.About.SpecialThanks.Info.LinkModule">Provided the multiplayer module!</sys:String>
+     <sys:String x:Key="Setup.About.SpecialThanks.Info.Mcim">Provided MCIM community resource mirrors and image hosting services for the help centre!</sys:String>
+     <sys:String x:Key="Setup.About.SpecialThanks.Info.Mcmod">Provided Chinese translation of mods and more related information!</sys:String>
++    <sys:String x:Key="Setup.About.SpecialThanks.Info.Wocowzj">Modified this build with assistance from DeepSeek.</sys:String>
+     <sys:String x:Key="Setup.About.SpecialThanks.Name.Bangbang93">bangbang93</sys:String>
++    <sys:String x:Key="Setup.About.SpecialThanks.Name.DeepSeek">DeepSeek</sys:String>
+     <sys:String x:Key="Setup.About.SpecialThanks.Name.EasyTier">EasyTier</sys:String>
+     <sys:String x:Key="Setup.About.SpecialThanks.Name.Emperormummy">Emperormummy</sys:String>
+     <sys:String x:Key="Setup.About.SpecialThanks.Name.Mcmod">MCMod (MC 百科)</sys:String>
+     <sys:String x:Key="Setup.About.SpecialThanks.Name.Pysio">Pysio @ Akaere Network</sys:String>
++    <sys:String x:Key="Setup.About.SpecialThanks.Name.Wocowzj">WOCOWZj</sys:String>
+     <sys:String x:Key="Setup.About.SpecialThanks.Name.Yunmoan">云默安 @ 至远光辉</sys:String>
+     <sys:String x:Key="Setup.About.SpecialThanks.Name.Z0z0r4">z0z0r4</sys:String>
+     <sys:String x:Key="Setup.About.SpecialThanks.OpenMcmod">Website</sys:String>
+@@ -3197,6 +3201,22 @@
+     <sys:String x:Key="Setup.Update.Error.NetworkFailed">Unable to retrieve latest version information. Please check your network connection.</sys:String>
+     <sys:String x:Key="Setup.Update.Install">Download and install</sys:String>
+     <sys:String x:Key="Setup.Update.Flatpak">Update through Flatpak/software centre</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.Title">Fork Update</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.OpenReleases">View all fork releases</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.Retry">Retry</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.CheckFailed.Hint">The GitHub API may be rate-limited or unreachable. Try again, or open the releases page directly.</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.Name">PCL CE · WOCOWZj Fork</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.Download.Zip">Download fork zip</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.Download.Page">Open fork download page</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.Download.Exe">Download fork exe</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.Desc.New">A new fork build is available, published {0}</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.Desc.Latest">Fork build is up to date (published {0})</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.Changelog.View">View fork changelog</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.Changelog.Unavailable">No fork changelog available...</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.Changelog.Title">Fork Update Notes</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.Changelog.Empty">This fork build has no update summary.</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.Checking">Checking for fork updates...</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.CheckFailed">Failed to fetch fork update info. Check your network connection.</sys:String>
+     <sys:String x:Key="Setup.Update.OpenDownload">Open download page</sys:String>
+     <sys:String x:Key="Setup.Update.Latest">Already up to date</sys:String>
+     <sys:String x:Key="Setup.Update.MirrorChyanCdk.Get">Get CDK</sys:String>
+diff --git a/PCL.Localization/Languages/en-US.axaml b/PCL.Localization/Languages/en-US.axaml
+index 2f1b019..c356ff7 100644
+--- a/PCL.Localization/Languages/en-US.axaml
++++ b/PCL.Localization/Languages/en-US.axaml
+@@ -2600,15 +2600,19 @@
+     <sys:String x:Key="Setup.About.SpecialThanks.GoBlog">Blog</sys:String>
+     <sys:String x:Key="Setup.About.SpecialThanks.Info.Bmclapi">Provided BMCLAPI mirror and Forge installation tool. Details at https://bmclapi.bangbang93.com</sys:String>
+     <sys:String x:Key="Setup.About.SpecialThanks.Info.Cloud">Provided cloud services for PCL CE.</sys:String>
++    <sys:String x:Key="Setup.About.SpecialThanks.Info.DeepSeek">Assisted with the changes in this build.</sys:String>
+     <sys:String x:Key="Setup.About.SpecialThanks.Info.IconDesign">Designed and created the PCL CE icon.</sys:String>
+     <sys:String x:Key="Setup.About.SpecialThanks.Info.LinkModule">Provided the multiplayer module!</sys:String>
+     <sys:String x:Key="Setup.About.SpecialThanks.Info.Mcim">Provided MCIM community resource mirrors and image hosting services for the help center!</sys:String>
+     <sys:String x:Key="Setup.About.SpecialThanks.Info.Mcmod">Provided Chinese translation of mods and more related information!</sys:String>
++    <sys:String x:Key="Setup.About.SpecialThanks.Info.Wocowzj">Modified this build with assistance from DeepSeek.</sys:String>
+     <sys:String x:Key="Setup.About.SpecialThanks.Name.Bangbang93">bangbang93</sys:String>
++    <sys:String x:Key="Setup.About.SpecialThanks.Name.DeepSeek">DeepSeek</sys:String>
+     <sys:String x:Key="Setup.About.SpecialThanks.Name.EasyTier">EasyTier</sys:String>
+     <sys:String x:Key="Setup.About.SpecialThanks.Name.Emperormummy">Emperormummy</sys:String>
+     <sys:String x:Key="Setup.About.SpecialThanks.Name.Mcmod">MCMod (MC 百科)</sys:String>
+     <sys:String x:Key="Setup.About.SpecialThanks.Name.Pysio">Pysio @ Akaere Network</sys:String>
++    <sys:String x:Key="Setup.About.SpecialThanks.Name.Wocowzj">WOCOWZj</sys:String>
+     <sys:String x:Key="Setup.About.SpecialThanks.Name.Yunmoan">云默安 @ 至远光辉</sys:String>
+     <sys:String x:Key="Setup.About.SpecialThanks.Name.Z0z0r4">z0z0r4</sys:String>
+     <sys:String x:Key="Setup.About.SpecialThanks.OpenMcmod">Website</sys:String>
+@@ -3266,6 +3270,22 @@
+     <sys:String x:Key="Setup.Update.Error.NetworkFailed">Unable to retrieve latest version information. Please check your network connection.</sys:String>
+     <sys:String x:Key="Setup.Update.Install">Download and install</sys:String>
+     <sys:String x:Key="Setup.Update.Flatpak">Update through Flatpak or software center</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.Title">Fork Update</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.OpenReleases">View all fork releases</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.Retry">Retry</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.CheckFailed.Hint">The GitHub API may be rate-limited or unreachable. Try again, or open the releases page directly.</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.Name">PCL CE · WOCOWZj Fork</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.Download.Zip">Download fork zip</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.Download.Page">Open fork download page</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.Download.Exe">Download fork exe</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.Desc.New">A new fork build is available, published {0}</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.Desc.Latest">Fork build is up to date (published {0})</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.Changelog.View">View fork changelog</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.Changelog.Unavailable">No fork changelog available...</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.Changelog.Title">Fork Update Notes</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.Changelog.Empty">This fork build has no update summary.</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.Checking">Checking for fork updates...</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.CheckFailed">Failed to fetch fork update info. Check your network connection.</sys:String>
+     <sys:String x:Key="Setup.Update.OpenDownload">Open download page</sys:String>
+     <sys:String x:Key="Setup.Update.Latest">Already up to date</sys:String>
+     <sys:String x:Key="Setup.Update.MirrorChyanCdk.Get">Get CDK</sys:String>
+diff --git a/PCL.Localization/Languages/zh-CN.axaml b/PCL.Localization/Languages/zh-CN.axaml
+index a0cb3eb..7078a53 100644
+--- a/PCL.Localization/Languages/zh-CN.axaml
++++ b/PCL.Localization/Languages/zh-CN.axaml
+@@ -2600,15 +2600,19 @@
+     <sys:String x:Key="Setup.About.SpecialThanks.GoBlog">转到博客</sys:String>
+     <sys:String x:Key="Setup.About.SpecialThanks.Info.Bmclapi">提供 BMCLAPI 镜像源和 Forge 安装工具，详见 https://bmclapi.bangbang93.com</sys:String>
+     <sys:String x:Key="Setup.About.SpecialThanks.Info.Cloud">提供了 PCL CE 的相关云服务</sys:String>
++    <sys:String x:Key="Setup.About.SpecialThanks.Info.DeepSeek">协助完成本版本的改版工作</sys:String>
+     <sys:String x:Key="Setup.About.SpecialThanks.Info.IconDesign">设计并制作了 PCL CE 的图标</sys:String>
+     <sys:String x:Key="Setup.About.SpecialThanks.Info.LinkModule">提供了联机模块</sys:String>
+     <sys:String x:Key="Setup.About.SpecialThanks.Info.Mcim">提供了 MCIM 中国模组下载镜像源和帮助库图床！</sys:String>
+     <sys:String x:Key="Setup.About.SpecialThanks.Info.Mcmod">提供了模组名称的中文翻译和更多相关信息！</sys:String>
++    <sys:String x:Key="Setup.About.SpecialThanks.Info.Wocowzj">由 WOCOWZj 在 DeepSeek 协助下改版了本版本</sys:String>
+     <sys:String x:Key="Setup.About.SpecialThanks.Name.Bangbang93">bangbang93</sys:String>
++    <sys:String x:Key="Setup.About.SpecialThanks.Name.DeepSeek">DeepSeek</sys:String>
+     <sys:String x:Key="Setup.About.SpecialThanks.Name.EasyTier">EasyTier</sys:String>
+     <sys:String x:Key="Setup.About.SpecialThanks.Name.Emperormummy">Emperormummy</sys:String>
+     <sys:String x:Key="Setup.About.SpecialThanks.Name.Mcmod">MC 百科</sys:String>
+     <sys:String x:Key="Setup.About.SpecialThanks.Name.Pysio">Pysio @ Akaere Network</sys:String>
++    <sys:String x:Key="Setup.About.SpecialThanks.Name.Wocowzj">WOCOWZj</sys:String>
+     <sys:String x:Key="Setup.About.SpecialThanks.Name.Yunmoan">云默安 @ 至远光辉</sys:String>
+     <sys:String x:Key="Setup.About.SpecialThanks.Name.Z0z0r4">z0z0r4</sys:String>
+     <sys:String x:Key="Setup.About.SpecialThanks.OpenMcmod">打开百科</sys:String>
+@@ -3266,6 +3270,22 @@
+     <sys:String x:Key="Setup.Update.Error.NetworkFailed">无法获取最新版本信息，请检查网络连接</sys:String>
+     <sys:String x:Key="Setup.Update.Install">下载并安装</sys:String>
+     <sys:String x:Key="Setup.Update.Flatpak">请通过 Flatpak 或软件中心更新</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.Title">改版更新</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.OpenReleases">查看全部改版发布</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.Retry">重试</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.CheckFailed.Hint">GitHub 接口可能被限流或网络不通，可点「重试」，或直接到发布页查看改版版本。</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.Name">PCL CE · WOCOWZj 改版</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.Download.Zip">下载改版压缩包</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.Download.Page">打开改版下载页</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.Download.Exe">下载改版 exe</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.Desc.New">发现新的改版版本，发布于 {0}</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.Desc.Latest">改版已是最新（发布于 {0}）</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.Changelog.View">查看改版更新日志</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.Changelog.Unavailable">没有可用的改版更新日志...</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.Changelog.Title">改版更新说明</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.Changelog.Empty">这个改版没有提供更新摘要。</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.Checking">正在检查改版更新...</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.CheckFailed">无法获取改版更新信息，请检查网络连接</sys:String>
+     <sys:String x:Key="Setup.Update.OpenDownload">打开下载页</sys:String>
+     <sys:String x:Key="Setup.Update.Latest">已是最新版本</sys:String>
+     <sys:String x:Key="Setup.Update.MirrorChyanCdk.Get">获取 CDK</sys:String>
+diff --git a/PCL.Localization/Languages/zh-TW.axaml b/PCL.Localization/Languages/zh-TW.axaml
+index 6f88f13..05e716a 100644
+--- a/PCL.Localization/Languages/zh-TW.axaml
++++ b/PCL.Localization/Languages/zh-TW.axaml
+@@ -2541,15 +2541,19 @@
+     <sys:String x:Key="Setup.About.SpecialThanks.GoBlog">轉到部落格</sys:String>
+     <sys:String x:Key="Setup.About.SpecialThanks.Info.Bmclapi">提供 BMCLAPI 鏡像來源和 Forge 安裝工具，詳見 https://bmclapi.bangbang93.com</sys:String>
+     <sys:String x:Key="Setup.About.SpecialThanks.Info.Cloud">提供了 PCL CE 的相關雲服務</sys:String>
++    <sys:String x:Key="Setup.About.SpecialThanks.Info.DeepSeek">協助完成本版本的改版工作</sys:String>
+     <sys:String x:Key="Setup.About.SpecialThanks.Info.IconDesign">設計並製作了 PCL CE 的圖示</sys:String>
+     <sys:String x:Key="Setup.About.SpecialThanks.Info.LinkModule">提供了連線模組</sys:String>
+     <sys:String x:Key="Setup.About.SpecialThanks.Info.Mcim">提供了 MCIM 社群資源鏡像來源和幫助庫圖床！</sys:String>
+     <sys:String x:Key="Setup.About.SpecialThanks.Info.Mcmod">提供了模組名稱的中文翻譯和更多相關資訊！</sys:String>
++    <sys:String x:Key="Setup.About.SpecialThanks.Info.Wocowzj">由 WOCOWZj 在 DeepSeek 協助下改版了本版本</sys:String>
+     <sys:String x:Key="Setup.About.SpecialThanks.Name.Bangbang93">bangbang93</sys:String>
++    <sys:String x:Key="Setup.About.SpecialThanks.Name.DeepSeek">DeepSeek</sys:String>
+     <sys:String x:Key="Setup.About.SpecialThanks.Name.EasyTier">EasyTier</sys:String>
+     <sys:String x:Key="Setup.About.SpecialThanks.Name.Emperormummy">Emperormummy</sys:String>
+     <sys:String x:Key="Setup.About.SpecialThanks.Name.Mcmod">MC 百科</sys:String>
+     <sys:String x:Key="Setup.About.SpecialThanks.Name.Pysio">Pysio @ Akaere Network</sys:String>
++    <sys:String x:Key="Setup.About.SpecialThanks.Name.Wocowzj">WOCOWZj</sys:String>
+     <sys:String x:Key="Setup.About.SpecialThanks.Name.Yunmoan">雲默安 @ 至遠光輝</sys:String>
+     <sys:String x:Key="Setup.About.SpecialThanks.Name.Z0z0r4">z0z0r4</sys:String>
+     <sys:String x:Key="Setup.About.SpecialThanks.OpenMcmod">開啟百科</sys:String>
+@@ -3197,6 +3201,22 @@
+     <sys:String x:Key="Setup.Update.Error.NetworkFailed">無法取得最新版本資訊，請檢查網路連線</sys:String>
+     <sys:String x:Key="Setup.Update.Install">下載並安裝</sys:String>
+     <sys:String x:Key="Setup.Update.Flatpak">請透過 Flatpak 或軟體中心更新</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.Title">改版更新</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.OpenReleases">查看全部改版發佈</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.Retry">重試</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.CheckFailed.Hint">GitHub 介面可能被限流或網路不通，可點「重試」，或直接到發佈頁查看改版版本。</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.Name">PCL CE · WOCOWZj 改版</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.Download.Zip">下載改版壓縮檔</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.Download.Page">開啟改版下載頁</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.Download.Exe">下載改版 exe</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.Desc.New">發現新的改版版本，發佈於 {0}</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.Desc.Latest">改版已是最新（發佈於 {0}）</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.Changelog.View">查看改版更新日誌</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.Changelog.Unavailable">沒有可用的改版更新日誌...</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.Changelog.Title">改版更新說明</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.Changelog.Empty">這個改版沒有提供更新摘要。</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.Checking">正在檢查改版更新...</sys:String>
++    <sys:String x:Key="Setup.Update.Fork.CheckFailed">無法取得改版更新資訊，請檢查網路連線</sys:String>
+     <sys:String x:Key="Setup.Update.OpenDownload">開啟下載頁</sys:String>
+     <sys:String x:Key="Setup.Update.Latest">已是最新版本</sys:String>
+     <sys:String x:Key="Setup.Update.MirrorChyanCdk.Get">取得 CDK</sys:String>
