@@ -119,6 +119,28 @@ jobs:
           Write-Host "产物大小: $size MB"
           $sha256 = (Get-FileHash 'dist/PCL2_CE_Release_win-x64.zip' -Algorithm SHA256).Hash.ToLower()
           "sha256=$sha256" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "size=$size"     | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Publish single-file exe
+        id: single
+        if: steps.upstream.outputs.changed == 'True'
+        shell: pwsh
+        run: |
+          dotnet publish PCL.Launcher/PCL.Launcher.csproj `
+            -c Release -r win-x64 -p:Platform=x64 `
+            --self-contained true `
+            -p:PublishSingleFile=true `
+            -p:IncludeNativeLibrariesForSelfExtract=true `
+            -p:EnableCompressionInSingleFile=true `
+            -p:DebugType=none `
+            -o dist/single
+          if ($LASTEXITCODE -ne 0) { throw "单文件 publish 失败" }
+          Copy-Item 'dist/single/PCL.Launcher.exe' 'dist/PCL2_CE_Release_win-x64.exe' -Force
+          $exe = Get-Item 'dist/PCL2_CE_Release_win-x64.exe'
+          $exeSize = [math]::Round($exe.Length / 1MB, 1)
+          Write-Host "单文件大小: $exeSize MB"
+          "exe_sha256=$((Get-FileHash $exe.FullName -Algorithm SHA256).Hash.ToLower())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "exe_size=$exeSize" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - name: Resolve release notes
         id: notes
@@ -143,11 +165,18 @@ jobs:
           - 关闭区域下载禁令（``RegionPolicy`` / ``RestrictedFeatures``）
           - 关于页「特别鸣谢」署名（WOCOWZj / DeepSeek）
 
+          ### 下载方式
+
+          | 文件 | 说明 |
+          | --- | --- |
+          | ``PCL2_CE_Release_win-x64.exe`` | **单文件自包含版**：双击直接运行，已内置 .NET 运行时（约 ${{ steps.single.outputs.exe_size }} MB） |
+          | ``PCL2_CE_Release_win-x64.zip`` | 框架依赖版：解压后运行 ``PCL.Launcher.exe``，需 .NET 10 Runtime（约 ${{ steps.publish.outputs.size }} MB） |
+
           ### 校验值
 
           ```
-          SHA256: ${{ steps.publish.outputs.sha256 }}
-          PCL2_CE_Release_win-x64.zip
+          exe SHA256: ${{ steps.single.outputs.exe_sha256 }}
+          zip SHA256: ${{ steps.publish.outputs.sha256 }}
           ```
 
           > 个人构建，非官方发行版；问题请勿反馈上游仓库。
@@ -165,7 +194,9 @@ jobs:
           body_path: ${{ steps.notes.outputs.path }}
           draft: true
           prerelease: false
-          files: dist/PCL2_CE_Release_win-x64.zip
+          files: |
+            dist/PCL2_CE_Release_win-x64.zip
+            dist/PCL2_CE_Release_win-x64.exe
 
       - name: Open issue on failure
         if: failure()

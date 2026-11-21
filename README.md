@@ -82,10 +82,16 @@ Linux / macOS 的打包流程见 `scripts/publish.sh`、`scripts/package-linux.s
 
 ## 运行
 
-发布产物为框架依赖（`--no-self-contained`），运行需要 **.NET 10 Runtime**：
+Release 里提供两种产物：
 
-- Windows：<https://get.dot.net/10>
-- Linux / macOS：同上，另需 X11 或 Wayland、macOS 12+
+| 文件 | 说明 |
+| --- | --- |
+| `PCL2_CE_Release_win-x64.exe` | **单文件自包含版**：双击直接运行，已内置 .NET 运行时，无需安装任何依赖（约 58 MB） |
+| `PCL2_CE_Release_win-x64.zip` | 框架依赖版：解压后运行 `PCL.Launcher.exe`，需要 **.NET 10 Runtime**（约 23 MB） |
+
+- 单文件版每次启动会把运行时解压到临时目录，首次启动慢几秒属正常现象。
+- .NET 10 Runtime 下载：<https://get.dot.net/10>
+- Linux / macOS 需 X11 或 Wayland、macOS 12+
 
 支持的系统版本与上游一致：
 
