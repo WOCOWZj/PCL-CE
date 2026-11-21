@@ -153,22 +153,27 @@ jobs:
         if: steps.upstream.outputs.changed == 'True'
         shell: pwsh
         run: |
+          # 反引号在 PowerShell 里是转义符，用变量拼出 Markdown 代码围栏与行内代码标记
+          $fence = [string]::new([char]'`', 3)
+          $tick = [string]::new([char]'`', 1)
           $behind = '${{ steps.upstream.outputs.behind }}'
           $log = (git log --oneline "origin/dev~$behind..origin/dev" --no-merges) -join "`n"
+          if ([string]::IsNullOrWhiteSpace($log)) { $log = '（上游 dev 无新提交）' }
+
           $body = @"
           ## 本次跟进
 
-          上游 ``PCL-Community/PCL-CE`` 的 ``dev`` 已跟进到 ``${{ steps.upstream.outputs.short }}``，本构建 = 上游该提交 + ``patches/0001-fork-customization.patch``。
+          上游 ${tick}${tick}PCL-Community/PCL-CE${tick}${tick} 的 ${tick}${tick}dev${tick}${tick} 已跟进到 ${tick}${tick}${{ steps.upstream.outputs.short }}${tick}${tick}，本构建 = 上游该提交 + ${tick}${tick}patches/0001-fork-customization.patch${tick}${tick}。
 
           ### 上游变更
 
-          ```
+          $fence
           $log
-          ```
+          $fence
 
           ### 本分支改动（patch）
 
-          - 关闭区域下载禁令（``RegionPolicy`` / ``RestrictedFeatures``）
+          - 关闭区域下载禁令（${tick}${tick}RegionPolicy${tick}${tick} / ${tick}${tick}RestrictedFeatures${tick}${tick}）
           - 关于页「特别鸣谢」署名（WOCOWZj / DeepSeek）
           - 更新页新增「改版更新」卡片：检测本仓库 release，显示版本、发布日期与说明，并提供 exe/zip 下载入口
 
@@ -176,22 +181,21 @@ jobs:
 
           | 文件 | 说明 |
           | --- | --- |
-          | ``PCL2_CE_Release_win-x64.exe`` | **单文件自包含版**：双击直接运行，已内置 .NET 运行时（约 ${{ steps.single.outputs.exe_size }} MB） |
-          | ``PCL2_CE_Release_win-x64.zip`` | 框架依赖版：解压后运行 ``PCL.Launcher.exe``，需 .NET 10 Runtime（约 ${{ steps.publish.outputs.size }} MB） |
+          | ${tick}${tick}PCL2_CE_Release_win-x64.exe${tick}${tick} | **单文件自包含版**：双击直接运行，已内置 .NET 运行时（约 ${{ steps.single.outputs.exe_size }} MB） |
+          | ${tick}${tick}PCL2_CE_Release_win-x64.zip${tick}${tick} | 框架依赖版：解压后运行 ${tick}${tick}PCL.Launcher.exe${tick}${tick}，需 .NET 10 Runtime（约 ${{ steps.publish.outputs.size }} MB） |
 
           ### 校验值
 
-          ```
+          $fence
           exe SHA256: ${{ steps.single.outputs.exe_sha256 }}
           zip SHA256: ${{ steps.publish.outputs.sha256 }}
-          ```
+          $fence
 
           > 个人构建，非官方发行版；问题请勿反馈上游仓库。
           "@
           $path = Join-Path $env:RUNNER_TEMP 'notes.md'
           [IO.File]::WriteAllText($path, $body, (New-Object System.Text.UTF8Encoding($false)))
           "path=$path" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-
       - name: Create draft release
         if: steps.upstream.outputs.changed == 'True'
         uses: softprops/action-gh-release@v2
