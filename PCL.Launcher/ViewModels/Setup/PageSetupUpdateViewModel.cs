@@ -6,6 +6,7 @@ using PCL.Core.UI.Hints;
 using PCL.Core.Utils;
 using PCL.Core.Utils.OS;
 using PCL.Core.ViewModel;
+using PCL.Launcher.Core.Updates;
 using PCL.Text;
 
 namespace PCL;
@@ -28,6 +29,10 @@ public partial class PageSetupUpdateViewModel : ViewModelBase
 
     private double _updateProgress;
 
+    private ForkReleaseInfo? _forkRelease;
+    private bool _forkChecking;
+    private string _forkStatusText = string.Empty;
+
     [ObservableProperty] public partial bool ChangelogDetailEnabled { get; set; } = true;
 
     [ObservableProperty] public partial bool ChannelEnabled { get; set; } = true;
@@ -35,6 +40,36 @@ public partial class PageSetupUpdateViewModel : ViewModelBase
     [ObservableProperty] public partial bool CheckAgainEnabled { get; set; } = true;
 
     [ObservableProperty] public partial string CurrentVersionText { get; set; } = string.Empty;
+
+    /// <summary>改版更新：检测到的改版版本名，例如 <c>PCL CE 2.15.1 · WOCOWZj 改版</c>。</summary>
+    [ObservableProperty] public partial string ForkNameText { get; set; } = string.Empty;
+
+    /// <summary>改版更新：状态描述，例如发布时间或「已是最新改版」。</summary>
+    [ObservableProperty] public partial string ForkDescText { get; set; } = string.Empty;
+
+    /// <summary>改版更新：更新日志摘要。</summary>
+    [ObservableProperty] public partial string ForkChangelogText { get; set; } = string.Empty;
+
+    /// <summary>改版更新：下载按钮文字（自包含 exe / zip / 打开下载页）。</summary>
+    [ObservableProperty] public partial string ForkDownloadText { get; set; } = string.Empty;
+
+    /// <summary>改版更新：下载按钮是否可用。</summary>
+    [ObservableProperty] public partial bool ForkDownloadEnabled { get; set; } = true;
+
+    /// <summary>改版更新：是否显示「有新改版」卡片。</summary>
+    [ObservableProperty] public partial bool ShowForkUpdateCard { get; set; }
+
+    /// <summary>改版更新：是否检测到比当前更新的改版版本（用于高亮下载按钮）。</summary>
+    [ObservableProperty] public partial bool ShowForkUpdateBadge { get; set; }
+
+    /// <summary>改版更新：检查失败时显示「重试」按钮。</summary>
+    [ObservableProperty] public partial bool ShowForkRetry { get; set; }
+
+    /// <summary>改版更新：查看更新日志按钮是否可用。</summary>
+    [ObservableProperty] public partial bool ForkChangelogEnabled { get; set; } = true;
+
+    /// <summary>改版更新：当前改版发布的网页地址。</summary>
+    [ObservableProperty] public partial string? ForkHtmlUrl { get; set; }
 
     [ObservableProperty]
     public partial string MirrorChyanKey { get; set; } = Config.Update.MirrorChyanKey;
@@ -105,10 +140,172 @@ public partial class PageSetupUpdateViewModel : ViewModelBase
     public void Reload()
     {
         CurrentVersionText = "PCL CE " + VersionNameFormat(LauncherCommon.VersionBaseName);
+        ForkNameText = Lang.Text("Setup.Update.Fork.Name");
+        ForkDescText = Lang.Text("Setup.Update.Fork.Checking");
         MirrorChyanKey = Config.Update.MirrorChyanKey;
         UpdateModeIndex = Math.Clamp((int)Config.Update.UpdateMode, 0, 3);
         SetUpdateButtonState(InstallButtonState);
         UpdateButtonEnabled = !IsFlatpak;
+    }
+
+    /// <summary>
+    /// 检查本 fork 的改版发布。与上游更新检查相互独立：
+    /// 网络失败只更新状态文字，不弹窗、不影响上游更新卡片。
+    /// </summary>
+    public async Task CheckForkUpdateAsync()
+    {
+        if (_forkChecking) return;
+        _forkChecking = true;
+        try
+        {
+            _forkStatusText = Lang.Text("Setup.Update.Fork.Checking");
+            ForkDescText = _forkStatusText;
+
+            var release = await ForkUpdateService.GetLatestReleaseAsync();
+            if (release is null)
+            {
+                // 网络失败（无网、GitHub 限流 403、代理异常等）也要把卡片显示出来，
+                // 否则用户完全看不到「改版更新」入口，也无法手动重试。
+                _forkRelease = null;
+                ForkHtmlUrl = null;
+                ShowForkUpdateCard = true;
+                ShowForkUpdateBadge = false;
+                ForkNameText = Lang.Text("Setup.Update.Fork.Name");
+                ForkDescText = Lang.Text("Setup.Update.Fork.CheckFailed");
+                ForkChangelogText = Lang.Text("Setup.Update.Fork.CheckFailed.Hint");
+                ForkDownloadText = Lang.Text("Setup.Update.Fork.Download.Page");
+                ForkDownloadEnabled = true;
+                ForkChangelogEnabled = false;
+                ShowForkRetry = true;
+                return;
+            }
+
+            _forkRelease = release;
+            ForkHtmlUrl = release.HtmlUrl;
+            var hasUpdate = ForkUpdateService.IsUpdateAvailable(
+                release,
+                LauncherCommon.VersionBaseName,
+                null);
+
+            ForkNameText = "PCL CE "
+                           + VersionNameFormat(ForkUpdateService.ParseVersion(release.Tag))
+                           + " · WOCOWZj 改版";
+            ForkDescText = hasUpdate
+                ? Lang.Text("Setup.Update.Fork.Desc.New", release.PublishedAt.ToLocalTime().ToString("yyyy-MM-dd"))
+                : Lang.Text("Setup.Update.Fork.Desc.Latest",
+                    release.PublishedAt.ToLocalTime().ToString("yyyy-MM-dd"));
+            ForkChangelogText = ExtractSummary(release.Body);
+            if (string.IsNullOrWhiteSpace(ForkChangelogText))
+                ForkChangelogText = Lang.Text("Setup.Update.Fork.Changelog.Empty");
+
+            ForkDownloadText = release.ExeUrl is not null
+                ? Lang.Text("Setup.Update.Fork.Download.Exe")
+                : release.ZipUrl is not null
+                    ? Lang.Text("Setup.Update.Fork.Download.Zip")
+                    : Lang.Text("Setup.Update.Fork.Download.Page");
+            ForkDownloadEnabled = true;
+            ForkChangelogEnabled = true;
+            ShowForkRetry = false;
+
+            // 无论是否有新版本都显示卡片：没有更新时用户仍能看到当前改版版本与全部发布入口，
+            // 有新版本时才高亮下载按钮。
+            ShowForkUpdateCard = true;
+            ShowForkUpdateBadge = hasUpdate;
+        }
+        catch (Exception ex)
+        {
+            LauncherCommon.Log(
+                ex,
+                "检查改版更新失败",
+                LauncherLogLevel.Hint,
+                userSummary: Lang.Text("Setup.Update.Fork.CheckFailed"));
+            ShowForkUpdateCard = true;
+            ShowForkUpdateBadge = false;
+            ForkNameText = Lang.Text("Setup.Update.Fork.Name");
+            ForkDescText = Lang.Text("Setup.Update.Fork.CheckFailed");
+            ForkChangelogText = Lang.Text("Setup.Update.Fork.CheckFailed.Hint");
+            ForkDownloadText = Lang.Text("Setup.Update.Fork.Download.Page");
+            ForkDownloadEnabled = true;
+            ForkChangelogEnabled = false;
+            ShowForkRetry = true;
+        }
+        finally
+        {
+            _forkChecking = false;
+        }
+    }
+
+    /// <summary>
+    /// 改版下载：优先单文件自包含 exe，其次 zip，都没有则打开发布页。
+    /// </summary>
+    public void OpenForkDownload()
+    {
+        var url = _forkRelease?.ExeUrl ?? _forkRelease?.ZipUrl ?? _forkRelease?.HtmlUrl
+                  ?? ForkUpdateService.AllReleasesUrl;
+        ForkDownloadEnabled = false;
+        try
+        {
+            Basics.OpenPath(url);
+        }
+        catch (Exception ex)
+        {
+            LauncherCommon.Log(
+                ex,
+                "打开改版下载地址失败",
+                LauncherLogLevel.Feedback,
+                userSummary: Lang.Text("Setup.Error.OperationFailed"));
+        }
+        finally
+        {
+            ForkDownloadEnabled = true;
+        }
+    }
+
+    /// <summary>查看改版发布说明。</summary>
+    public async Task ShowForkChangelogAsync()
+    {
+        ForkChangelogEnabled = false;
+        try
+        {
+            var content = _forkRelease?.Body;
+            if (string.IsNullOrWhiteSpace(content))
+            {
+                await Dialog.ShowAsync(
+                    new TextDialogRequest
+                    {
+                        Title = Lang.Text("Setup.Update.Fork.Changelog.Title"),
+                        Content = Lang.Text("Setup.Update.Fork.Changelog.Unavailable"),
+                        Buttons = DialogButtons.Ok
+                    });
+                return;
+            }
+
+            await Dialog.ShowAsync(
+                new MarkdownDialogRequest
+                {
+                    Title = Lang.Text("Setup.Update.Fork.Changelog.Title"),
+                    Content = content,
+                    Buttons = DialogButtons.Ok
+                });
+        }
+        catch (Exception ex)
+        {
+            LauncherCommon.Log(
+                ex,
+                "查看改版更新日志失败",
+                LauncherLogLevel.Feedback,
+                userSummary: Lang.Text("Setup.Error.OperationFailed"));
+        }
+        finally
+        {
+            ForkChangelogEnabled = true;
+        }
+    }
+
+    /// <summary>打开改版发布页。</summary>
+    public static void OpenForkReleasesPage(string? url)
+    {
+        Basics.OpenPath(url ?? ForkUpdateService.AllReleasesUrl);
     }
 
     public async Task CheckUpdateAsync()

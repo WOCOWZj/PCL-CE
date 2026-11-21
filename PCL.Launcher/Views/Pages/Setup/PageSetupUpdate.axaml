@@ -191,6 +191,80 @@
                 </StackPanel>
             </ui:MyCard>
 
+            <ui:MyCard x:Name="CardForkUpdate"
+                       Margin="0,15"
+                       IsVisible="{Binding ShowForkUpdateCard}">
+                <StackPanel Margin="20,20,20,20">
+                    <Grid ColumnDefinitions="50,10,*,150"
+                          RowDefinitions="29,1,20,8,Auto,10,Auto">
+                        <Image Grid.Row="0"
+                               Grid.RowSpan="3"
+                               Grid.Column="0"
+                               Width="50"
+                               Height="50"
+                               HorizontalAlignment="Left"
+                               VerticalAlignment="Center"
+                               Source="avares://PCL.Launcher/Assets/Images/icon.png" />
+                        <TextBlock x:Name="TextForkUpdateName"
+                                   Grid.Row="0"
+                                   Grid.Column="2"
+                                   FontWeight="Bold"
+                                   FontSize="20"
+                                   HorizontalAlignment="Left"
+                                   VerticalAlignment="Bottom"
+                                   Text="{Binding ForkNameText}" />
+                        <TextBlock x:Name="TextForkUpdateDesc"
+                                   Grid.Row="2"
+                                   Grid.Column="2"
+                                   FontSize="14"
+                                   HorizontalAlignment="Left"
+                                   VerticalAlignment="Top"
+                                   Text="{Binding ForkDescText}" />
+                        <Grid Grid.Row="0"
+                              Grid.RowSpan="2"
+                              Grid.Column="3"
+                              HorizontalAlignment="Stretch"
+                              VerticalAlignment="Center">
+                            <ui:MyButton x:Name="BtnForkRetry"
+                                         Width="140"
+                                         MinWidth="85"
+                                         Height="30"
+                                         Padding="13,0"
+                                         ColorType="Normal"
+                                         IsVisible="{Binding ShowForkRetry}"
+                                         Text="{loc:Loc Setup.Update.Fork.Retry}" />
+                            <ui:MyButton x:Name="BtnForkDownload"
+                                         Width="140"
+                                         MinWidth="85"
+                                         Height="30"
+                                         Padding="13,0"
+                                         ColorType="Highlight"
+                                         IsVisible="{Binding ShowForkUpdateBadge}"
+                                         IsEnabled="{Binding ForkDownloadEnabled}"
+                                         Text="{Binding ForkDownloadText}" />
+                        </Grid>
+                        <TextBlock x:Name="TextForkChangelog"
+                                   Grid.Row="4"
+                                   Grid.Column="0"
+                                   Grid.ColumnSpan="4"
+                                   TextWrapping="Wrap"
+                                   Text="{Binding ForkChangelogText}" />
+                        <StackPanel Grid.Row="6"
+                                    Grid.Column="0"
+                                    Grid.ColumnSpan="4"
+                                    Orientation="Horizontal">
+                            <ui:MyTextButton x:Name="BtnForkChangelogDetail"
+                                             FontWeight="Thin"
+                                             Margin="0,0,20,0"
+                                             IsEnabled="{Binding ForkChangelogEnabled}"
+                                             Text="{loc:Loc Setup.Update.Fork.Changelog.View}" />
+                            <ui:MyTextButton x:Name="BtnForkReleases"
+                                             FontWeight="Thin"
+                                             Text="{loc:Loc Setup.Update.Fork.OpenReleases}" />
+                        </StackPanel>
+                    </Grid>
+                </StackPanel>
+            </ui:MyCard>
             <ui:MyCard x:Name="CardOtherOption"
                        Margin="0,15"
                        Title="{loc:Loc Setup.Update.OtherOptions.Title}"

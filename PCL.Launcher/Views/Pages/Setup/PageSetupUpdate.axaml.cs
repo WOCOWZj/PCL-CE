@@ -32,6 +32,11 @@ public partial class PageSetupUpdate : MyPageRight
         BtnChangelog.Click += (_, _) => PageSetupUpdateViewModel.OpenReleasesPage();
         BtnChangelogDetail.Click += async (_, _) => await ViewModel.ShowChangelogAsync();
         BtnUpdate.Click += async (_, _) => await ViewModel.StartUpdateAsync();
+        BtnForkDownload.Click += (_, _) => ViewModel.OpenForkDownload();
+        BtnForkRetry.Click += async (_, _) => await ViewModel.CheckForkUpdateAsync();
+        BtnForkChangelogDetail.Click += async (_, _) => await ViewModel.ShowForkChangelogAsync();
+        BtnForkReleases.Click += (_, _) =>
+            PageSetupUpdateViewModel.OpenForkReleasesPage(ViewModel.ForkHtmlUrl);
         ComboSystemUpdateMode.IsEnabled = UpdateManager.SupportsInAppUpdate;
         Loaded += async (_, _) =>
         {
@@ -39,6 +44,7 @@ public partial class PageSetupUpdate : MyPageRight
             _loaded = true;
             Reload();
             await ViewModel.CheckUpdateAsync();
+            await ViewModel.CheckForkUpdateAsync();
         };
     }
 
