@@ -84,7 +84,7 @@
                 <Grid x:Name="PanThanks"
                       Margin="21,40,21,16"
                       ColumnDefinitions="40,*,150"
-                      RowDefinitions="45,45,45,45,45,45,45">
+                      RowDefinitions="45,45,45,45,45,45,45,45,45">
                     <ui:MyImage Grid.Row="0"
                                 Grid.Column="0"
                                 Width="34"
@@ -218,6 +218,21 @@
                                    IsHitTestVisible="False"
                                    Info="{loc:Loc Setup.About.SpecialThanks.Info.IconDesign}"
                                    Title="{loc:Loc Setup.About.SpecialThanks.Name.Emperormummy}" />
+
+                    <ui:MyListItem Grid.Row="7"
+                                   Grid.Column="1"
+                                   Grid.ColumnSpan="2"
+                                   Margin="-5,0,0,0"
+                                   IsHitTestVisible="False"
+                                   Info="{loc:Loc Setup.About.SpecialThanks.Info.Wocowzj}"
+                                   Title="{loc:Loc Setup.About.SpecialThanks.Name.Wocowzj}" />
+                    <ui:MyListItem Grid.Row="8"
+                                   Grid.Column="1"
+                                   Grid.ColumnSpan="2"
+                                   Margin="-5,0,0,0"
+                                   IsHitTestVisible="False"
+                                   Info="{loc:Loc Setup.About.SpecialThanks.Info.DeepSeek}"
+                                   Title="{loc:Loc Setup.About.SpecialThanks.Name.DeepSeek}" />
                 </Grid>
             </ui:MyCard>
 
